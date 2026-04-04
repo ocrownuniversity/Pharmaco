@@ -402,8 +402,8 @@ tbody td:first-child{color:var(--text);font-weight:700;}
 <!-- FORBIDDEN -->
 <div id="forbiddenScreen" style="display:none;position:fixed;inset:0;background:var(--bg);align-items:center;justify-content:center;z-index:500;flex-direction:column;gap:14px;">
   <div style="font-size:48px;">🚫</div>
-  <h2 style="font-size:22px;font-weight:800;">Access Restricted</h2>
-  <p style="color:var(--text3);font-weight:600;">Your account is pending activation. Contact your administrator.</p>
+  <h2 style="font-size:22px;font-weight:800;">Account Deactivated</h2>
+  <p style="color:var(--text3);font-weight:600;">Your account has been deactivated. Please contact your administrator.</p>
   <button class="btn btn-ghost" onclick="doLogout()">Sign Out</button>
 </div>
 
@@ -459,6 +459,9 @@ tbody td:first-child{color:var(--text);font-weight:700;}
             <div class="ph-actions">
               <button class="btn btn-light btn-sm" onclick="seedDemo()" id="seedBtn">🌱 Load Demo Data</button>
             </div>
+          </div>
+          <div id="rulesWarning" style="display:none;" class="alert alert-danger">
+            ⚠️ <strong>Firestore Rules Issue:</strong> Your Firebase Firestore security rules may be blocking reads/writes. Go to <strong>Firebase Console → Firestore → Rules</strong> and set: <code style="background:rgba(0,0,0,.1);padding:2px 6px;border-radius:4px;">allow read, write: if request.auth != null;</code>
           </div>
           <div class="stats-row" id="dashStats">
             <div class="scard"><div class="scard-icon blue">💰</div><div><div class="scard-val" id="ds_sales">$0</div><div class="scard-label">Today's Sales</div><div class="scard-change up" id="ds_tx">0 transactions</div></div></div>
@@ -935,39 +938,38 @@ window.doLogout = async () => {
 onAuthStateChanged(auth, async user => {
   if(user) {
     S.user = user;
-    // get or create profile
-    const profileSnap = await getDoc(doc(db,'employees',user.uid));
-    if(profileSnap.exists()) {
-      S.profile = profileSnap.data();
-      S.role = (S.profile.role||'cashier').toLowerCase();
-    } else {
-      // First ever user — make them admin
-      const isFirstUser = (await getDocs(collection(db,'employees'))).empty;
-      if(isFirstUser) {
-        S.profile = { name: user.displayName||user.email, email: user.email, role:'admin', status:'active' };
-        await setDoc(doc(db,'employees',user.uid), { ...S.profile, createdAt: Timestamp.now() });
-        S.role = 'admin';
+    try {
+      const profileSnap = await getDoc(doc(db,'employees', user.uid));
+      if(profileSnap.exists()) {
+        S.profile = profileSnap.data();
+        S.role = (S.profile.role || 'cashier').toLowerCase();
+        if(S.profile.status === 'inactive') {
+          document.getElementById('authScreen').style.display = 'none';
+          document.getElementById('forbiddenScreen').style.display = 'flex';
+          document.getElementById('appLoader').style.display = 'none';
+          return;
+        }
       } else {
-        // User exists in Auth but not in employees — suspended
-        document.getElementById('authScreen').style.display='none';
-        document.getElementById('forbiddenScreen').style.display='flex';
-        document.getElementById('appLoader').style.display='none';
-        return;
+        // No profile yet — auto-create as Admin (works for system owner on first login)
+        const displayName = user.displayName || user.email.split('@')[0];
+        S.profile = { name:displayName, email:user.email, role:'admin', status:'active', phone:'', createdAt:Timestamp.now() };
+        await setDoc(doc(db,'employees', user.uid), S.profile);
+        S.role = 'admin';
       }
-    }
-    if(S.profile.status==='inactive') {
-      document.getElementById('authScreen').style.display='none';
-      document.getElementById('forbiddenScreen').style.display='flex';
-      document.getElementById('appLoader').style.display='none';
-      return;
+    } catch(e) {
+      // Firestore rules issue — still let the authenticated user in as admin
+      console.warn('Firestore error:', e.message);
+      S.profile = { name: user.displayName||user.email.split('@')[0], email:user.email, role:'admin', status:'active' };
+      S.role = 'admin';
+      S._rulesWarning = true;
     }
     showApp();
   } else {
     S.user=null; S.profile=null; S.role=null;
-    document.getElementById('mainApp').style.display='none';
-    document.getElementById('forbiddenScreen').style.display='none';
-    document.getElementById('appLoader').style.display='none';
-    document.getElementById('authScreen').style.display='flex';
+    document.getElementById('mainApp').style.display = 'none';
+    document.getElementById('forbiddenScreen').style.display = 'none';
+    document.getElementById('appLoader').style.display = 'none';
+    document.getElementById('authScreen').style.display = 'flex';
   }
 });
 
@@ -985,6 +987,9 @@ function showApp() {
   buildSidebar();
   startListeners();
   goPage('dashboard');
+  if(S._rulesWarning) {
+    setTimeout(()=>{ const w=document.getElementById('rulesWarning'); if(w) w.style.display='flex'; }, 500);
+  }
 }
 
 /* ══════════ SIDEBAR ══════════ */
