@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- PharmaCo v3.0 - Fixed Auth 2026-04-04 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
@@ -936,41 +937,68 @@ window.doLogout = async () => {
 };
 
 onAuthStateChanged(auth, async user => {
-  if(user) {
-    S.user = user;
-    try {
-      const profileSnap = await getDoc(doc(db,'employees', user.uid));
-      if(profileSnap.exists()) {
-        S.profile = profileSnap.data();
-        S.role = (S.profile.role || 'cashier').toLowerCase();
-        if(S.profile.status === 'inactive') {
-          document.getElementById('authScreen').style.display = 'none';
-          document.getElementById('forbiddenScreen').style.display = 'flex';
-          document.getElementById('appLoader').style.display = 'none';
-          return;
-        }
-      } else {
-        // No profile yet — auto-create as Admin (works for system owner on first login)
-        const displayName = user.displayName || user.email.split('@')[0];
-        S.profile = { name:displayName, email:user.email, role:'admin', status:'active', phone:'', createdAt:Timestamp.now() };
-        await setDoc(doc(db,'employees', user.uid), S.profile);
-        S.role = 'admin';
-      }
-    } catch(e) {
-      // Firestore rules issue — still let the authenticated user in as admin
-      console.warn('Firestore error:', e.message);
-      S.profile = { name: user.displayName||user.email.split('@')[0], email:user.email, role:'admin', status:'active' };
-      S.role = 'admin';
-      S._rulesWarning = true;
-    }
-    showApp();
-  } else {
-    S.user=null; S.profile=null; S.role=null;
+  // HIDE LOADER ALWAYS
+  document.getElementById('appLoader').style.display = 'none';
+
+  if (!user) {
+    // Not signed in — show login
     document.getElementById('mainApp').style.display = 'none';
     document.getElementById('forbiddenScreen').style.display = 'none';
-    document.getElementById('appLoader').style.display = 'none';
     document.getElementById('authScreen').style.display = 'flex';
+    return;
   }
+
+  // User IS signed in — always get them into the app
+  S.user = user;
+
+  // Try to load their Firestore profile
+  let profileData = null;
+  try {
+    const snap = await getDoc(doc(db, 'employees', user.uid));
+    if (snap.exists()) {
+      profileData = snap.data();
+    }
+  } catch(e) {
+    console.warn('Could not read Firestore profile:', e.code, e.message);
+    // Will be handled below — don't block login
+  }
+
+  if (profileData) {
+    // Profile found
+    S.profile = profileData;
+    S.role = (profileData.role || 'admin').toLowerCase();
+
+    // ONLY block if admin explicitly deactivated this account
+    if (profileData.status === 'inactive') {
+      document.getElementById('authScreen').style.display = 'none';
+      document.getElementById('forbiddenScreen').style.display = 'flex';
+      return;
+    }
+  } else {
+    // No profile in Firestore yet (new system, or Firestore rules issue)
+    // Auto-create as admin — the authenticated user is the system owner
+    const displayName = user.displayName || user.email.split('@')[0];
+    S.profile = {
+      name: displayName,
+      email: user.email,
+      role: 'admin',
+      status: 'active',
+      phone: '',
+      createdAt: Timestamp.now()
+    };
+    S.role = 'admin';
+
+    // Try to save — if rules block this, we still proceed
+    try {
+      await setDoc(doc(db, 'employees', user.uid), S.profile);
+    } catch(e) {
+      console.warn('Could not save profile (rules issue?):', e.message);
+      S._rulesWarning = true;
+    }
+  }
+
+  // Always show the app for authenticated users
+  showApp();
 });
 
 /* ══════════ SHOW APP ══════════ */
